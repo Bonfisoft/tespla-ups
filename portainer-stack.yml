@@ -86,7 +86,7 @@ services:
 
       # SNMP Settings for Synology DSM UPS monitoring
       - "SNMP_COMMUNITY=${SNMP_COMMUNITY:-public}"
-      - "SNMP_PORT=${SNMP_PORT:-1161}"
+      - "SNMP_PORT=${SNMP_PORT:-161}"
     volumes:
       - ups_status:/var/lib/nut/ups
     ports:
@@ -138,13 +138,13 @@ services:
 
       # SNMP Settings for Synology DSM UPS monitoring
       - "SNMP_COMMUNITY=${SNMP_COMMUNITY:-public}"
-      - "SNMP_PORT=${SNMP_PORT:-1161}"
+      - "SNMP_PORT=${SNMP_PORT:-161}"
     volumes:
       - ups_status:/var/lib/nut/ups
     ports:
       - "${BRIDGE_PORT:-8100}:8100"
-      # Port 1161 only needed for REPORTING_MODE=snmp or upsd
-      - "${SNMP_PORT:-1161}:${SNMP_PORT:-1161}/udp"
+      # Port 161 only needed for REPORTING_MODE=snmp or upsd
+      - "${SNMP_PORT:-161}:${SNMP_PORT:-161}/udp"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8100/api/status"]
       interval: 30s

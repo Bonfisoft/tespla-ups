@@ -7,6 +7,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.4] - 2026-05-31
+
+### Fixed
+
+- `battery.charge` reported as `0` by the native NUT server (`upsc ups@localhost battery.charge`) even when the web dashboard showed the correct value. Root cause: the NUT protocol spec requires `battery.charge` to be an integer (0–100); the bridge was sending a Python float string (e.g. `"89.4"`), which NUT clients could not parse and silently fell back to `0`. Fixed by rounding `soe` to the nearest integer before sending it over the protocol.
+
 ## [1.2.3] - 2026-05-24
 
 ### Fixed

@@ -22,7 +22,7 @@ from pysnmp.smi import rfc1902
 # Environment settings
 BRIDGE_API_URL = os.getenv('BRIDGE_API_URL', 'http://localhost:8100/api/status')
 SNMP_COMMUNITY = os.getenv('SNMP_COMMUNITY', 'public')
-SNMP_PORT = int(os.getenv('SNMP_PORT', '1161'))
+SNMP_PORT = int(os.getenv('SNMP_PORT', '161'))
 
 # Cache for API data
 cache = {'data': None, 'timestamp': 0}

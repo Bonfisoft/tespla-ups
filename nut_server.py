@@ -97,13 +97,14 @@ class NUTProtocolHandler(socketserver.StreamRequestHandler):
 
         status = bridge.state.get('status', 'OL')
         soe = bridge.state.get('soe', 100.0)
+        soe_int = round(soe)
 
         # Calculate battery runtime (rough estimate: 5% = 1 hour for Powerwall)
-        runtime_minutes = int(soe * 12) if soe > 0 else 0
+        runtime_minutes = soe_int * 12 if soe_int > 0 else 0
 
         return {
             'ups.status': status,
-            'battery.charge': str(soe),
+            'battery.charge': str(soe_int),
             'battery.runtime': str(runtime_minutes),
             'battery.type': 'LiIon',
             'ups.model': 'Tesla Powerwall',

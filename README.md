@@ -127,7 +127,7 @@ All service ports can be customized via environment variables:
 - `PW_PORT` - PyPowerwall web UI port (default: `8675`)
 - `NUT_PORT` - NUT UPS daemon port (default: `3493`)
 - `BRIDGE_PORT` - Tesla UPS Bridge dashboard port (default: `8100`)
-- `SNMP_PORT` - SNMP agent port for Synology DSM (default: `1161`, use 161 only if host SNMP is disabled)
+- `SNMP_PORT` - SNMP agent port for Synology DSM (default: `161`)
 - `NUT_SERVER_PORT` - Native NUT protocol server port (default: `3493`, used when `REPORTING_MODE=nut`)
 
 ### NUT Server Configuration
@@ -144,7 +144,7 @@ Example using custom ports:
 PW_PORT=8080
 NUT_PORT=3494
 BRIDGE_PORT=9000
-SNMP_PORT=1161  # Use 1161 to avoid conflict with host SNMP daemon
+SNMP_PORT=161
 NUT_SERVER_PORT=3493
 ```
 
@@ -222,7 +222,7 @@ Powerwall -> pypowerwall -> powerwall-bridge (SNMP agent) -> Synology DSM
 
 Set these environment variables in your `.env` file:
 
-- `SNMP_PORT` - SNMP port (default: `1161`, change to `161` only if host SNMP is disabled)
+- `SNMP_PORT` - SNMP port (default: `161`)
 - `SNMP_COMMUNITY` - SNMP community string (default: `public`)
 - `NUT_HOST` - NUT server hostname (default: `nut-upsd`)
 - `NUT_PORT` - NUT server port (default: `3493`)
@@ -235,7 +235,7 @@ Set these environment variables in your `.env` file:
 2. Select **SNMP UPS** as UPS type
 3. Configure:
    - **IP address:** Your Docker host IP (e.g., `192.168.1.34`)
-   - **Port:** `1161` (or your custom `SNMP_PORT`)
+   - **Port:** `161` (or your custom `SNMP_PORT`)
    - **SNMP MIB:** `auto` or `ietf` (RFC 1628 standard MIB)
    - **SNMP version:** `v2c`
    - **Community:** `public` (or your custom `SNMP_COMMUNITY`)
@@ -246,15 +246,8 @@ Set these environment variables in your `.env` file:
 
 - If you get "Cannot connect to the network", check that:
   - The bridge container is running: `docker ps | grep powerwall-bridge`
-  - Port 1161 is not blocked by firewall
+  - Port 161 is not blocked by firewall
   - You're using the Docker **host** IP, not container IP
-
-**Note:** To use standard SNMP port 161, disable the host's SNMP daemon:
-
-```bash
-sudo systemctl stop snmpd
-sudo systemctl disable snmpd
-```
 
 ### Security Note
 
@@ -493,14 +486,14 @@ pytest -m integration
 
 - **Step 4: Test Mode 2 - SNMP Agent (Synology DSM)**
 
-  This mode runs the SNMP agent on port 1161 for Synology DSM monitoring.
+  This mode runs the SNMP agent on port 161 for Synology DSM monitoring.
 
   ```bash
   # Start bridge in SNMP mode
   REPORTING_MODE=snmp python bridge.py
 
-  # Query with snmpwalk (community: public, port: 1161)
-  snmpwalk -v 1 -c public localhost:1161 .1.3.6.1.2.1.33
+  # Query with snmpwalk (community: public, port: 161)
+  snmpwalk -v 1 -c public localhost:161 .1.3.6.1.2.1.33
 
   # Expected output: RFC 1628 UPS MIB OIDs with battery and status data
   ```
@@ -518,7 +511,7 @@ pytest -m integration
 
   # Expected output:
   # ups.status: OL
-  # battery.charge: 100.0
+  # battery.charge: 100
 
   # To test with external nut-upsd container:
   # 1. Start nut-upsd container with dummy-ups driver
@@ -730,7 +723,7 @@ powerwall-bridge:
   ports:
     - "8100:8100"
     - "3493:3493"  # NUT protocol (only for REPORTING_MODE=nut)
-    - "1161:1161/udp"  # SNMP (only for REPORTING_MODE=snmp or upsd)
+    - "161:161/udp"  # SNMP (only for REPORTING_MODE=snmp or upsd)
 ```
 
 ## Health Checks

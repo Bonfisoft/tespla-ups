@@ -18,12 +18,12 @@ COPY nut-snmp/nut_snmp_agent.py /app/nut_snmp_agent.py
 
 EXPOSE 8100
 EXPOSE 3493
-EXPOSE 1161/udp
+EXPOSE 161/udp
 
 # Environment variables:
 # REPORTING_MODE=nut|snmp|upsd (default: nut)
 # NUT_SERVER_PORT - NUT protocol server port (default: 3493)
-# SNMP_PORT - SNMP agent port (default: 1161)
+# SNMP_PORT - SNMP agent port (default: 161)
 
 # Healthcheck: verify API is responding
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \

@@ -6,7 +6,6 @@ sends an email alert on grid outages.
 """
 
 import asyncio
-import json
 import logging
 import os
 import smtplib
@@ -14,32 +13,32 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from email.mime.text import MIMEText
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, Dict
 
 import requests
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI
 
-from i18n import _, detect_language_from_header
+import api
+from i18n import _
 from providers import BatteryProvider, BatteryStatus, load_providers
 from providers import ConfigError
 from nut_server import NUTServer
 
-__version__ = "1.2.4"
+__version__ = "1.2.9"
 
-# Global list of loaded providers
-providers_list: list[BatteryProvider] = []
-
-# Global NUT server instance (when running in native NUT mode)
-nut_server: NUTServer | None = None
+# Mutable app-level state (avoids module-level global reassignment)
+_app_state: Dict[str, Any] = {
+    "providers": [],
+    "nut_server": None,
+}
 
 
 def print_startup_banner():
     """Print startup banner with configuration information."""
     reporting_mode = os.getenv("REPORTING_MODE", "nut").upper()
     nut_port = os.getenv("NUT_SERVER_PORT", "3493")
-    snmp_port = os.getenv("SNMP_PORT", "1161")
+    snmp_port = os.getenv("SNMP_PORT", "161")
     bridge_port = os.getenv("BRIDGE_PORT", "8100")
     status_file = os.getenv("STATUS_FILE", "/var/lib/nut/ups/powerwall.dev")
     poll_interval = os.getenv("POLL_INTERVAL", "15")
@@ -62,29 +61,29 @@ def print_startup_banner():
 @asynccontextmanager
 async def lifespan(_fastapi_app: FastAPI):
     """Initialize battery providers and start the background polling thread."""
-    global providers_list, nut_server
-
     # Print startup banner
     print_startup_banner()
 
-    providers_list = load_providers()
+    _app_state["providers"] = load_providers()
 
     # Start reporting services based on REPORTING_MODE
-    nut_server = start_reporting_services()
+    _app_state["nut_server"] = start_reporting_services()
 
     threading.Thread(target=background_poller, daemon=True).start()
     yield
 
     # Cleanup
-    if nut_server:
-        nut_server.stop()
+    if _app_state["nut_server"]:
+        _app_state["nut_server"].stop()
 
 
 app = FastAPI(lifespan=lifespan)
 
 STATUS_FILE = os.getenv("STATUS_FILE", "/var/lib/nut/ups/ups.dev")
 BATTERY_WARNING = float(os.getenv("BATTERY_WARNING", "30.0"))  # Warning level (%)
-BATTERY_THRESHOLD = float(os.getenv("BATTERY_THRESHOLD", "15.0"))  # Critical/shutdown level (%)
+BATTERY_THRESHOLD = float(
+    os.getenv("BATTERY_THRESHOLD", "15.0")
+)  # Critical/shutdown level (%)
 
 state: Dict[str, Any] = {
     "status": "OL",
@@ -103,6 +102,9 @@ state: Dict[str, Any] = {
 
 # SSE event queue for broadcasting state updates to connected clients
 sse_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+api.register(state, sse_queue)
+app.include_router(api.router)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -166,14 +168,15 @@ def start_reporting_services() -> NUTServer | None:
         # Start SNMP agent as subprocess (background process)
         import subprocess
         import sys
+
         try:
             subprocess.Popen(
                 [sys.executable, "/app/nut_snmp_agent.py"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                start_new_session=True
+                start_new_session=True,
             )
-            snmp_port = get_env_int("SNMP_PORT", 1161)
+            snmp_port = get_env_int("SNMP_PORT", 161)
             logger.info("SNMP agent started on port %d", snmp_port)
         except OSError as exc:
             logger.error("Failed to start SNMP agent: %s", exc)
@@ -183,7 +186,9 @@ def start_reporting_services() -> NUTServer | None:
         # No SNMP, no native NUT server - just file output
         try:
             write_nut_status_file("OL", 100.0)
-            logger.info("Created initial NUT status file for upsd mode: %s", STATUS_FILE)
+            logger.info(
+                "Created initial NUT status file for upsd mode: %s", STATUS_FILE
+            )
         except OSError as exc:
             logger.warning("Failed to create initial NUT status file: %s", exc)
 
@@ -396,7 +401,7 @@ def background_poller() -> None:
             # Poll all providers
             provider_statuses: list[tuple[str, BatteryStatus | None]] = []
 
-            for provider in providers_list:
+            for provider in _app_state["providers"]:
                 status = poll_provider(provider)
                 provider_name = (
                     getattr(provider, "_bridge_name", None) or provider.provider_name
@@ -436,10 +441,17 @@ def background_poller() -> None:
                     state["last_notified"] = time.strftime("%H:%M:%S")
 
             # Grid online notification (with battery status)
-            if not any_on_battery and state["grid_offline_notified"] and not state["grid_online_notified"] and min_soe > 0.0:
+            if (
+                not any_on_battery
+                and state["grid_offline_notified"]
+                and not state["grid_online_notified"]
+                and min_soe > 0.0
+            ):
                 alert_lang = os.getenv("DEFAULT_LANGUAGE", "en")
                 if send_alert(
-                    _("alert.grid_restored", alert_lang, soe=min_soe), config, alert_lang
+                    _("alert.grid_restored", alert_lang, soe=min_soe),
+                    config,
+                    alert_lang,
                 ):
                     state["grid_online_notified"] = True
                     state["last_notified"] = time.strftime("%H:%M:%S")
@@ -451,26 +463,43 @@ def background_poller() -> None:
                 state["grid_online_notified"] = False
 
             # Battery warning level notification
-            if any_on_battery and min_soe <= BATTERY_WARNING and not state["warning_notified"] and min_soe > 0.0:
+            if (
+                any_on_battery
+                and min_soe <= BATTERY_WARNING
+                and not state["warning_notified"]
+                and min_soe > 0.0
+            ):
                 alert_lang = os.getenv("DEFAULT_LANGUAGE", "en")
                 if send_alert(
-                    _("alert.battery_warning", alert_lang, soe=min_soe), config, alert_lang
+                    _("alert.battery_warning", alert_lang, soe=min_soe),
+                    config,
+                    alert_lang,
                 ):
                     state["warning_notified"] = True
                     state["last_notified"] = time.strftime("%H:%M:%S")
 
             # Battery critical level notification and shutdown signal
-            if any_on_battery and min_soe <= BATTERY_THRESHOLD and not state["shutdown_notified"] and min_soe > 0.0:
+            if (
+                any_on_battery
+                and min_soe <= BATTERY_THRESHOLD
+                and not state["shutdown_notified"]
+                and min_soe > 0.0
+            ):
                 alert_lang = os.getenv("DEFAULT_LANGUAGE", "en")
                 if send_alert(
-                    _("alert.battery_critical", alert_lang, soe=min_soe), config, alert_lang
+                    _("alert.battery_critical", alert_lang, soe=min_soe),
+                    config,
+                    alert_lang,
                 ):
                     state["shutdown_notified"] = True
                     state["last_notified"] = time.strftime("%H:%M:%S")
 
                 # Send shutdown signal to NUT clients
                 if not state["shutdown_signal_sent"]:
-                    logger.warning("Battery at critical level (%.1f%%), sending shutdown signal", min_soe)
+                    logger.warning(
+                        "Battery at critical level (%.1f%%), sending shutdown signal",
+                        min_soe,
+                    )
                     # Update NUT status to indicate imminent shutdown
                     write_nut_status_file("OB LB FSD", min_soe)  # FSD = Forced Shutdown
                     state["shutdown_signal_sent"] = True
@@ -498,119 +527,10 @@ def background_poller() -> None:
         time.sleep(config["poll_interval"])
 
 
-@app.get("/api/status")
-def get_status() -> Dict[str, Any]:
-    """Return the latest UPS and battery provider state."""
-    return state
-
-
-def get_status_display(status: str, lang: str) -> str:
-    """Get translated status label."""
-    if "LB" in status:
-        return _("status.low_battery", lang)
-    elif "OB" in status:
-        return _("status.on_battery", lang)
-    elif "OL" in status:
-        return _("status.online", lang)
-    return _("status.unknown", lang)
-
-
-@app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, lang: str | None = None) -> str:
-    """Render a simple status dashboard for browser access."""
-    # Determine language: query param > Accept-Language header > default
-    if lang is None:
-        accept_language = request.headers.get("accept-language")
-        lang = detect_language_from_header(accept_language)
-
-    color = "green" if state["status"] == "OL" else "red"
-    status_display = get_status_display(state["status"], lang)
-
-    # Translate grid state
-    grid_key = (
-        "grid.connected" if state["grid"] == "SystemGridConnected" else "grid.down"
-    )
-    grid_display = _(grid_key, lang)
-
-    # Build provider details HTML
-    provider_rows = []
-    for p in state.get("providers", []):
-        p_color = "green" if p.get("grid_connected") else "red"
-        p_status = "grid.connected" if p.get("grid_connected") else "grid.down"
-        p_status_text = _(p_status, lang)
-        p_name = p.get("name", "unknown")
-        p_soe = p.get("soe", 0.0)
-        provider_rows.append(
-            f'<tr><td style="padding:8px;">{p_name}</td>'
-            f'<td style="padding:8px; color:{p_color};">{p_status_text}</td>'
-            f'<td style="padding:8px;">{p_soe:.1f}%</td></tr>'
-        )
-
-    providers_table = ""
-    if provider_rows:
-        providers_table = f"""
-        <table style="margin:20px auto; border-collapse:collapse;">
-            <tr style="background:#f0f0f0;">
-                <th style="padding:8px;">{_("dashboard.provider", lang)}</th>
-                <th style="padding:8px;">{_("dashboard.grid", lang)}</th>
-                <th style="padding:8px;">{_("dashboard.battery", lang)}</th>
-            </tr>
-            {''.join(provider_rows)}
-        </table>
-        """
-
-    return f"""
-    <html>
-        <head>
-            <title>{_("dashboard.title", lang)}</title>
-            <meta http-equiv="refresh" content="15">
-        </head>
-        <body style="font-family:sans-serif; text-align:center; padding-top:50px;">
-            <h1>{_("dashboard.title", lang)}</h1>
-            <div style="font-size:2em; color:{color}; font-weight:bold;">{status_display}</div>
-            <p>{_("dashboard.grid", lang)}: {grid_display}</p>
-            <p>{_("dashboard.battery", lang)}: {state['soe']:.1f}%</p>
-            {providers_table}
-            <p style="color:gray;">
-                {_("dashboard.last_notification", lang)}: {state['last_notified']}
-            </p>
-            <p style="color:gray; font-size:0.8em;">{_("dashboard.refreshing", lang)}</p>
-        </body>
-    </html>
-    """
-
-
-async def sse_generator() -> AsyncGenerator[str, None]:
-    """Generate SSE events from the queue."""
-    # Send initial state immediately
-    initial_event = {"event": "connected", "data": dict(state)}
-    yield f"data: {json.dumps(initial_event)}\n\n"
-
-    while True:
-        try:
-            event = await asyncio.wait_for(sse_queue.get(), timeout=30.0)
-            yield f"data: {json.dumps(event)}\n\n"
-        except asyncio.TimeoutError:
-            # Send keepalive comment every 30s to keep connection alive
-            yield ":keepalive\n\n"
-
-
-@app.get("/api/events")
-async def events_endpoint() -> StreamingResponse:
-    """SSE endpoint for real-time state updates."""
-    return StreamingResponse(
-        sse_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
-
 
 if __name__ == "__main__":
     import uvicorn
     import os
 
-    bridge_port = int(os.getenv("BRIDGE_PORT", "8100"))
-    uvicorn.run(app, host="0.0.0.0", port=bridge_port)
+    port = int(os.getenv("BRIDGE_PORT", "8100"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

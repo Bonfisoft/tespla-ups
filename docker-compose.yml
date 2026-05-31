@@ -68,8 +68,8 @@ services:
       - ups_status:/var/lib/nut/ups
     ports:
       - "${BRIDGE_PORT:-8100}:${BRIDGE_PORT:-8100}"
-      # Port 1161 only needed for REPORTING_MODE=snmp or upsd
-      - "${SNMP_PORT:-1161}:${SNMP_PORT:-1161}/udp"
+      # Port 161 only needed for REPORTING_MODE=snmp or upsd
+      - "${SNMP_PORT:-161}:${SNMP_PORT:-161}/udp"
     environment:
       - REPORTING_MODE=${REPORTING_MODE:-snmp}
     healthcheck:
